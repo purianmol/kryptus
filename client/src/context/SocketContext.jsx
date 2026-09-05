@@ -29,7 +29,9 @@ export function SocketProvider({ children }) {
     const token = localStorage.getItem('accessToken');
     if (!token) return;
 
-    const newSocket = io('/', {
+    const socketUrl = import.meta.env.VITE_API_URL || '/';
+
+    const newSocket = io(socketUrl, {
       auth: { token },
       reconnection: true,
       reconnectionAttempts: 10,
