@@ -22,24 +22,20 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 // ── Socket.io setup ──
 const io = new Server(server, {
-  cors: isProduction
-    ? undefined // same-origin in production
-    : {
-        origin: process.env.CLIENT_URL || 'http://localhost:5173',
-        methods: ['GET', 'POST'],
-        credentials: true,
-      },
+  cors: {
+    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
   pingTimeout: 60000,
   pingInterval: 25000,
 });
 
 // ── Middleware ──
-if (!isProduction) {
-  app.use(cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
-    credentials: true,
-  }));
-}
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  credentials: true,
+}));
 app.use(express.json({ limit: '1mb' }));
 
 // ── API Routes ──
@@ -56,7 +52,8 @@ app.get('/api/health', (req, res) => {
 // ── Serve React client in production ──
 // In production, the built client (vite build) is served as static files
 // from ../client/dist. This means a single process serves both API and UI.
-if (isProduction) {
+// Only enabled if SERVE_CLIENT=true is provided
+if (isProduction && process.env.SERVE_CLIENT === 'true') {
   const clientDist = path.join(__dirname, '../../client/dist');
   app.use(express.static(clientDist));
 
