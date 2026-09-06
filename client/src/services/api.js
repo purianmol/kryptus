@@ -174,6 +174,28 @@ class ApiService {
     return res.json();
   }
 
+  /**
+   * Fetch the authenticated user's own identity key and backup status.
+   * Used to detect key mismatches and missing backups.
+   */
+  async fetchOwnKeyInfo() {
+    const res = await this.request('/keys/me');
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  /**
+   * Upload ONLY the encrypted private key backup (without re-uploading the full bundle).
+   * Used when an existing browser retroactively creates a backup.
+   */
+  async uploadKeyBackup(encryptedPrivateKeyBackup) {
+    const res = await this.request('/keys/backup', {
+      method: 'PATCH',
+      body: JSON.stringify({ encryptedPrivateKeyBackup }),
+    });
+    return res.json();
+  }
+
   // ── Message endpoints ──
 
   async getPendingMessages() {

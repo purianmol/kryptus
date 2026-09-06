@@ -25,7 +25,8 @@ export default function Chat() {
   const {
     encrypt, decrypt, establishSession,
     restoreState, restoreError,
-    restoreKeysWithPassword, skipRestoreAndGenerateNewKeys,
+    restoreKeysWithPassword, generateNewKeysWithPassword,
+    uploadBackupWithPassword, reuploadKeysWithPassword,
   } = useCrypto();
   const { connected, onlineUsers, sendMessage, ackMessage, onMessage, onDelivery, onTyping, emitTyping } = useSocket();
 
@@ -446,14 +447,16 @@ export default function Chat() {
         />
       )}
 
-      {/* Key Restore Modal — shown when logging in from a new device */}
-      {(restoreState === 'needs_password' || restoreState === 'no_backup') && (
+      {/* Key Restore Modal — shown when key sync issues are detected */}
+      {['needs_password', 'no_backup', 'needs_backup_upload', 'needs_reupload', 'keys_mismatch_restore'].includes(restoreState) && (
         <KeyRestoreModal
+          mode={restoreState}
           onRestore={restoreKeysWithPassword}
-          onSkip={skipRestoreAndGenerateNewKeys}
-          isLoading={false}
+          onGenerateNew={generateNewKeysWithPassword}
+          onUploadBackup={uploadBackupWithPassword}
+          onReupload={reuploadKeysWithPassword}
+          isLoading={restoreState === 'restoring'}
           error={restoreError}
-          noBackup={restoreState === 'no_backup'}
         />
       )}
     </div>

@@ -17,12 +17,15 @@ const CryptoContext = createContext(null);
 
 /**
  * KEY RESTORE STATES
- *   'idle'        — no action needed (keys loaded from localStorage)
- *   'checking'    — fetching key backup from server
- *   'needs_password' — backup found, waiting for user to enter password
- *   'no_backup'   — no backup on server (old account), must generate fresh keys
- *   'restoring'   — decryption in progress
- *   'done'        — keys are ready
+ *   'idle'                — initial state, no user logged in
+ *   'checking'            — fetching key info from server
+ *   'needs_password'      — backup found on new device, waiting for password to decrypt
+ *   'no_backup'           — no backup on server (old account), must generate fresh keys WITH password
+ *   'needs_backup_upload' — keys exist locally but no backup on server; prompt for password to create backup
+ *   'needs_reupload'      — local keys don't match server AND no backup; re-upload our keys + create backup
+ *   'keys_mismatch_restore' — local keys don't match server BUT backup exists; restore from backup
+ *   'restoring'           — decryption / key operation in progress
+ *   'done'                — keys are ready
  */
 
 export function CryptoProvider({ children }) {
@@ -30,7 +33,7 @@ export function CryptoProvider({ children }) {
   const [privateKeys, setPrivateKeys] = useState(null);
 
   // Key restore UI state
-  const [restoreState, setRestoreState] = useState('idle'); // see above
+  const [restoreState, setRestoreState] = useState('idle');
   const [restoreError, setRestoreError] = useState(null);
 
   // In-memory cache of peer public keys (identity key strings fetched from server)
@@ -57,6 +60,38 @@ export function CryptoProvider({ children }) {
       console.log('[Crypto] Loaded existing keys for', user.username);
       setPrivateKeys(localKeys);
       setRestoreState('done');
+
+      // Background check: verify key consistency and backup status
+      api.fetchOwnKeyInfo().then((data) => {
+        if (!data) return; // no key bundle on server yet (shouldn't happen, but safe)
+
+        const localPubKey = localKeys.identityKey.publicKey;
+        const serverPubKey = data.identityKey;
+        const hasBackup = data.hasBackup;
+
+        if (localPubKey === serverPubKey) {
+          // Keys match server — check backup status
+          if (!hasBackup) {
+            console.warn('[Crypto] Keys match server but NO backup exists — prompting for backup upload');
+            setRestoreState('needs_backup_upload');
+          }
+          // else: everything is perfect, stay 'done'
+        } else {
+          // Keys DON'T match server — another device overwrote them
+          console.warn('[Crypto] LOCAL keys do NOT match server! Split-brain detected.');
+          if (hasBackup) {
+            // Backup exists from the other device — offer to restore
+            setRestoreState('keys_mismatch_restore');
+          } else {
+            // No backup — our local keys are the only copy. Re-upload them.
+            setRestoreState('needs_reupload');
+          }
+        }
+      }).catch((err) => {
+        console.error('[Crypto] Failed to check key consistency:', err);
+        // Don't block the user — keys still work for this browser
+      });
+
       return;
     }
 
@@ -114,15 +149,88 @@ export function CryptoProvider({ children }) {
   }, [user]);
 
   /**
-   * skipRestoreAndGenerateNewKeys — user opts to generate fresh keys,
-   * accepting that old messages will be unreadable.
+   * generateNewKeysWithPassword — generates fresh keys AND creates encrypted backup.
+   * Replaces the old skipRestoreAndGenerateNewKeys that didn't create a backup.
+   * Used from the 'no_backup' flow when there's no existing backup on server.
+   *
+   * @param {string} password — user's password, used to encrypt the backup
    */
-  const skipRestoreAndGenerateNewKeys = useCallback(async () => {
+  const generateNewKeysWithPassword = useCallback(async (password) => {
     if (!user) return;
     setRestoreState('restoring');
-    await _generateAndUploadKeys(user._id, null); // no password → no backup uploaded
-    setRestoreState('done');
+    setRestoreError(null);
+    try {
+      await _generateAndUploadKeys(user._id, password);
+      setRestoreState('done');
+    } catch (err) {
+      console.error('[Crypto] Key generation failed:', err);
+      setRestoreError('Failed to generate keys. Please try again.');
+      setRestoreState('no_backup');
+    }
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * uploadBackupWithPassword — encrypts current local private keys and uploads
+   * ONLY the backup to the server (doesn't re-upload the full key bundle).
+   * Used when keys are in sync with the server but no backup exists.
+   *
+   * @param {string} password — user's password, used to encrypt the backup
+   */
+  const uploadBackupWithPassword = useCallback(async (password) => {
+    if (!user || !privateKeys) return;
+    setRestoreState('restoring');
+    setRestoreError(null);
+    try {
+      const encryptedBackup = await encryptPrivateKeys(privateKeys, password);
+      await api.uploadKeyBackup(encryptedBackup);
+      setRestoreState('done');
+      console.log('[Crypto] Key backup created and uploaded for', user.username);
+    } catch (err) {
+      console.error('[Crypto] Backup upload failed:', err);
+      setRestoreError('Failed to create backup. Please try again.');
+      setRestoreState('needs_backup_upload');
+    }
+  }, [user, privateKeys]);
+
+  /**
+   * reuploadKeysWithPassword — re-uploads the FULL key bundle from localStorage
+   * to the server AND creates an encrypted backup. Used when another device
+   * overwrote our keys on the server and no backup exists.
+   *
+   * @param {string} password — user's password, used to encrypt the backup
+   */
+  const reuploadKeysWithPassword = useCallback(async (password) => {
+    if (!user || !privateKeys) return;
+    setRestoreState('restoring');
+    setRestoreError(null);
+    try {
+      // Encrypt backup
+      const encryptedBackup = await encryptPrivateKeys(privateKeys, password);
+
+      // Re-upload full key bundle with the backup
+      const publicBundle = {
+        identityKey: privateKeys.identityKey.publicKey,
+        signedPreKey: {
+          keyId: privateKeys.signedPreKey.keyId || 1,
+          publicKey: privateKeys.signedPreKey.publicKey,
+          signature: privateKeys.signedPreKey.signature || 'migrated',
+        },
+        oneTimePreKeys: (privateKeys.oneTimePreKeys || []).map((k, i) => ({
+          keyId: k.keyId || i + 1,
+          publicKey: k.publicKey,
+        })),
+        encryptedPrivateKeyBackup: encryptedBackup,
+      };
+
+      await api.uploadKeys(publicBundle);
+      setRestoreState('done');
+      console.log('[Crypto] Keys re-uploaded and backup created for', user.username);
+    } catch (err) {
+      console.error('[Crypto] Key re-upload failed:', err);
+      setRestoreError('Failed to re-sync keys. Please try again.');
+      setRestoreState('needs_reupload');
+    }
+  }, [user, privateKeys]);
 
   /**
    * Internal helper — generates key bundle, uploads public part (+ encrypted backup
@@ -155,6 +263,7 @@ export function CryptoProvider({ children }) {
         encryptedPrivateKeyBackup ? '(with encrypted backup)' : '(no backup)');
     } catch (err) {
       console.error('Key generation/upload failed:', err);
+      throw err; // re-throw so caller can handle
     } finally {
       generatingRef.current = false;
     }
@@ -306,12 +415,19 @@ export function CryptoProvider({ children }) {
    */
   const getFingerprint = useCallback(
     async (peerId) => {
-      if (!privateKeys) return null;
+      // Try React state first, then fall back to localStorage
+      let keys = privateKeys;
+      if (!keys && user) {
+        keys = loadPrivateKeys(user._id);
+        if (keys) setPrivateKeys(keys);
+      }
+      if (!keys) return null;
+
       const peerPubKey = await getPeerPublicKey(peerId);
       if (!peerPubKey) return null;
-      return computeFingerprint(privateKeys.identityKey.publicKey, peerPubKey);
+      return computeFingerprint(keys.identityKey.publicKey, peerPubKey);
     },
-    [privateKeys, getPeerPublicKey]
+    [privateKeys, user, getPeerPublicKey]
   );
 
   return (
@@ -322,7 +438,9 @@ export function CryptoProvider({ children }) {
         restoreError,
         initializeKeys,
         restoreKeysWithPassword,
-        skipRestoreAndGenerateNewKeys,
+        generateNewKeysWithPassword,
+        uploadBackupWithPassword,
+        reuploadKeysWithPassword,
         establishSession,
         encrypt,
         decrypt,
