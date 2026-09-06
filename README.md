@@ -42,8 +42,8 @@ Most messaging backends have full access to every message ever sent. **Kryptus i
 | 1 | **Confidentiality** — Only sender and recipient can read messages | Curve25519 ECDH + XSalsa20-Poly1305 AEAD |
 | 2 | **Integrity** — Tampered ciphertext is rejected | Poly1305 MAC verification on every decrypt |
 | 3 | **Real-time delivery** — Messages arrive instantly when online | Socket.io WebSocket transport |
-| 4 | **Store-and-forward** — Offline users receive messages on reconnect | MongoDB-backed QUEUED → DELIVERED pipeline |
-| 5 | **Metadata minimization** — Server learns as little as possible | No read receipts stored, optional TTL purge |
+| 4 | **Store-and-forward + Sync** | Offline users receive messages, full history syncs to new devices | MongoDB history storage |
+| 5 | **Explicit Retention Policy** | E2EE contents are secure, but encrypted metadata is kept for 1 year | 365-day TTL index on Messages |
 
 ---
 
@@ -100,6 +100,7 @@ Most messaging backends have full access to every message ever sent. **Kryptus i
 │                                                                               │
 │  ⚠️  The server NEVER receives plaintext or private keys.                     │
 │      Messages collection contains only opaque ciphertext + IV.               │
+│      Encrypted history is retained for 365 days to allow cross-device sync.  │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -202,7 +203,15 @@ function encryptMessage(plaintext, sharedSecret) {
 
 > The server **cannot distinguish** a "Hello" message from a 500-word essay — it sees only random-looking bytes.
 
-### 4. Message Decryption
+### 4. Multi-Device Sync & Retention Policy
+
+Because Kryptus uses **Diffie-Hellman Key Exchange**, the shared secret between sender and recipient is identical. This enables a powerful feature: **Multi-Device History Sync**.
+- The server permanently stores the encrypted ciphertext for **365 days**.
+- When you log into a new device (and restore your private keys with your password), the app fetches your entire encrypted chat history.
+- Both sent and received messages decrypt perfectly using the identical shared secret.
+- **Privacy Trade-off:** While your message *contents* are perfectly protected by E2EE, the server retains *metadata* (who you messaged, when, and how much ciphertext) for a year. This is a standard trade-off to provide a seamless modern chat experience across devices.
+
+### 5. Message Decryption
 
 The recipient derives the **same shared secret** (ECDH is symmetric) and decrypts:
 
@@ -225,7 +234,7 @@ function decryptMessage(ciphertextB64, ivB64, sharedSecret) {
 
 **Tamper detection:** If even a single bit of the ciphertext is modified, `secretbox.open()` returns `null` — the Poly1305 MAC ensures integrity.
 
-### 5. Message Flow Diagram
+### 6. Message Flow Diagram
 
 ```
   Alice (Client)                    Server                     Bob (Client)
@@ -260,7 +269,7 @@ function decryptMessage(ciphertextB64, ivB64, sharedSecret) {
        │◀────── msg_delivered ────────│◀──────── msg_ack ───────────│
 ```
 
-### 6. Safety Number Verification
+### 7. Safety Number Verification
 
 Users can verify they're talking to the right person by comparing **safety numbers** — a deterministic fingerprint computed from both identity keys:
 
@@ -600,10 +609,9 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 |-------|---------|--------|
 | Phase 1 | Core E2EE messaging, auth, key exchange | ✅ Complete |
 | Phase 1 | Friend request system | ✅ Complete |
-| Phase 1 | Real-time delivery + store-and-forward | ✅ Complete |
+| Phase 1 | Cross-device history sync (1-year retention) | ✅ Complete |
 | Phase 1 | Safety number verification | ✅ Complete |
 | Phase 2 | Redis Pub/Sub for multi-instance Socket.io | 🔲 Planned |
-| Phase 2 | Message TTL purge for delivered ciphertext | 🔲 Planned |
 | Phase 3 | Group chat (Sender Keys protocol) | 🔲 Planned |
 | Phase 3 | Push notifications for offline mobile clients | 🔲 Planned |
 | Phase 3 | Double Ratchet (Signal Protocol) for forward secrecy | 🔲 Planned |

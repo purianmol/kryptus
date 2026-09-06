@@ -196,8 +196,51 @@ export default function Chat() {
 
       // Pre-establish session
       await establishSession(contact._id);
+
+      // Fetch history and merge
+      try {
+        const data = await api.getConversationHistory(contact._id);
+        if (data.messages && data.messages.length > 0) {
+          const decryptedMessages = [];
+          
+          for (const msg of data.messages) {
+            // Decrypt the ciphertext (works for both sent and received messages because the shared secret is identical)
+            const plaintext = await decrypt(contact._id, msg.ciphertext, msg.iv);
+            
+            decryptedMessages.push({
+              id: msg.messageId,
+              senderId: msg.senderId,
+              text: plaintext || '🔒 Unable to decrypt',
+              timestamp: msg.createdAt,
+              status: msg.senderId === user._id ? 'delivered' : 'received',
+              failed: !plaintext,
+            });
+          }
+
+          setConversations((prev) => {
+            const existing = prev[contact._id] || [];
+            // Merge existing and new, deduplicating by id
+            const mergedMap = new Map();
+            for (const msg of existing) {
+              mergedMap.set(msg.id, msg);
+            }
+            for (const msg of decryptedMessages) {
+              mergedMap.set(msg.id, msg);
+            }
+            
+            // Sort by timestamp
+            const mergedList = Array.from(mergedMap.values()).sort(
+              (a, b) => new Date(a.timestamp) - new Date(b.timestamp)
+            );
+            
+            return { ...prev, [contact._id]: mergedList };
+          });
+        }
+      } catch (err) {
+        console.error('Failed to fetch conversation history:', err);
+      }
     },
-    [establishSession]
+    [establishSession, decrypt, user._id]
   );
 
   // Send message

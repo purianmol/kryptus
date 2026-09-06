@@ -25,6 +25,32 @@ router.get('/pending', authenticate, async (req, res) => {
 });
 
 /**
+ * GET /api/messages/history/:peerId
+ * Fetch full conversation history between the authenticated user and a peer.
+ * Includes both sent and received messages, sorted chronologically.
+ */
+router.get('/history/:peerId', authenticate, async (req, res) => {
+  try {
+    const { peerId } = req.params;
+    const userId = req.user.userId;
+
+    const messages = await Message.find({
+      $or: [
+        { senderId: userId, recipientId: peerId },
+        { senderId: peerId, recipientId: userId }
+      ]
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    res.json({ messages });
+  } catch (error) {
+    console.error('History fetch error:', error);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+/**
  * POST /api/messages/ack
  * Acknowledge receipt of messages (mark as DELIVERED).
  * Accepts an array of messageIds.

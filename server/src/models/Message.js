@@ -41,13 +41,15 @@ const MessageSchema = new Schema({
 // Compound index for efficient queued-message queries per recipient
 MessageSchema.index({ recipientId: 1, status: 1 });
 
-// Optional: TTL purge delivered messages after 30 days (metadata minimization)
+// Compound index for efficient history queries between two users
+MessageSchema.index({ senderId: 1, recipientId: 1, createdAt: 1 });
+
+// Explicit Retention Policy: 
+// E2EE protects message contents, but the server retains the encrypted ciphertext (metadata)
+// for 365 days to allow cross-device sync. After 1 year, messages are automatically deleted.
 MessageSchema.index(
   { createdAt: 1 },
-  {
-    expireAfterSeconds: 30 * 24 * 60 * 60, // 30 days
-    partialFilterExpression: { status: 'DELIVERED' },
-  }
+  { expireAfterSeconds: 365 * 24 * 60 * 60 } // 365 days
 );
 
 module.exports = mongoose.model('Message', MessageSchema);

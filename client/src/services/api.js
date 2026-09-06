@@ -181,6 +181,11 @@ class ApiService {
     return res.json();
   }
 
+  async getConversationHistory(peerId) {
+    const res = await this.request(`/messages/history/${peerId}`);
+    return res.json();
+  }
+
   async ackMessages(messageIds) {
     const res = await this.request('/messages/ack', {
       method: 'POST',
