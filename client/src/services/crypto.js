@@ -189,7 +189,6 @@ export function computeFingerprint(identityKey1Base64, identityKey2Base64) {
 
 /**
  * Save private keys to localStorage.
- * In production these would be encrypted with a password-derived key.
  * Shared secrets are deliberately NOT stored here — they are always
  * derived on-the-fly from (myPrivateKey + peerPublicKey) to prevent
  * stale-key decryption failures when a peer re-generates their keys.
@@ -207,3 +206,91 @@ export function clearPrivateKeys(userId) {
   localStorage.removeItem(`keys_${userId}`);
 }
 
+// ── Password-Encrypted Key Backup (Web Crypto API) ──
+
+/**
+ * Derive an AES-GCM CryptoKey from a password and salt using PBKDF2.
+ * @param {string} password - User's login password (UTF-8)
+ * @param {Uint8Array} salt  - Random 16-byte salt
+ * @returns {Promise<CryptoKey>}
+ */
+async function deriveKeyFromPassword(password, salt) {
+  const enc = new TextEncoder();
+  const keyMaterial = await window.crypto.subtle.importKey(
+    'raw',
+    enc.encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveKey']
+  );
+  return window.crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: 310_000, // NIST recommended minimum for PBKDF2-SHA-256
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+/**
+ * Encrypt private keys with a password-derived AES-GCM key.
+ * Returns { ciphertext, iv, salt } — all base64 strings — safe to send to server.
+ *
+ * @param {object} privateKeys - The private key bundle to back up
+ * @param {string} password    - User's login password
+ * @returns {Promise<{ ciphertext: string, iv: string, salt: string }>}
+ */
+export async function encryptPrivateKeys(privateKeys, password) {
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv   = window.crypto.getRandomValues(new Uint8Array(12)); // AES-GCM standard nonce
+  const key  = await deriveKeyFromPassword(password, salt);
+
+  const enc = new TextEncoder();
+  const ciphertextBuffer = await window.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    enc.encode(JSON.stringify(privateKeys))
+  );
+
+  // Convert buffers to base64 for JSON transport
+  return {
+    ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertextBuffer))),
+    iv:         btoa(String.fromCharCode(...iv)),
+    salt:       btoa(String.fromCharCode(...salt)),
+  };
+}
+
+/**
+ * Decrypt an encrypted key backup using the user's password.
+ * Throws a DOMException ('OperationError') if the password is wrong or the data is corrupted.
+ *
+ * @param {{ ciphertext: string, iv: string, salt: string }} encryptedBackup
+ * @param {string} password
+ * @returns {Promise<object>} The decrypted private key bundle
+ */
+export async function decryptPrivateKeys(encryptedBackup, password) {
+  const { ciphertext, iv: ivB64, salt: saltB64 } = encryptedBackup;
+
+  // Decode base64 → Uint8Array
+  const toBytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const salt       = toBytes(saltB64);
+  const iv         = toBytes(ivB64);
+  const cipherBuf  = toBytes(ciphertext);
+
+  const key = await deriveKeyFromPassword(password, salt);
+
+  // Will throw DOMException on wrong password (authentication tag mismatch)
+  const plaintextBuffer = await window.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    cipherBuf
+  );
+
+  const dec = new TextDecoder();
+  return JSON.parse(dec.decode(plaintextBuffer));
+}

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useCrypto } from '../context/CryptoContext';
 import { Link, useNavigate } from 'react-router-dom';
 
 export default function Register() {
@@ -10,7 +9,6 @@ export default function Register() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
-  const { initializeKeys } = useCrypto();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -32,8 +30,7 @@ export default function Register() {
     try {
       const { ok, data } = await register(username, password);
       if (ok) {
-        // Generate and upload crypto keys immediately after registration
-        await initializeKeys(data.user);
+        // Keys are initialized automatically by AuthContext.register() using the password.
         navigate('/chat');
       } else {
         setError(data.error || 'Registration failed.');

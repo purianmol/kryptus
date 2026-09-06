@@ -8,6 +8,7 @@ import MessageList from '../components/MessageList';
 import MessageInput from '../components/MessageInput';
 import SafetyNumber from '../components/SafetyNumber';
 import AddFriendPanel from '../components/AddFriendPanel';
+import KeyRestoreModal from '../components/KeyRestoreModal';
 import { v4 as uuidv4 } from 'uuid';
 
 // Simple UUID generator fallback
@@ -21,7 +22,11 @@ function generateId() {
 
 export default function Chat() {
   const { user, logout } = useAuth();
-  const { encrypt, decrypt, establishSession } = useCrypto();
+  const {
+    encrypt, decrypt, establishSession,
+    restoreState, restoreError,
+    restoreKeysWithPassword, skipRestoreAndGenerateNewKeys,
+  } = useCrypto();
   const { connected, onlineUsers, sendMessage, ackMessage, onMessage, onDelivery, onTyping, emitTyping } = useSocket();
 
   const [contacts, setContacts] = useState([]);
@@ -261,6 +266,22 @@ export default function Chat() {
   const currentMessages = activeContact ? conversations[activeContact._id] || [] : [];
   const isTyping = activeContact && peerTyping[activeContact._id];
 
+  // While keys are being checked or restored, show a loading spinner
+  const keysLoading = restoreState === 'checking' || restoreState === 'restoring';
+
+  if (keysLoading) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', flexDirection: 'column', gap: '1rem',
+        color: 'var(--text-secondary)',
+      }}>
+        <div style={{ fontSize: '2rem' }}>🔐</div>
+        <p>{restoreState === 'checking' ? 'Checking for key backup…' : 'Restoring encryption keys…'}</p>
+      </div>
+    );
+  }
+
   return (
     <div className={`chat-app ${chatOpen ? 'chat-open' : ''}`}>
       {/* Sidebar */}
@@ -379,6 +400,17 @@ export default function Chat() {
           peerId={activeContact._id}
           peerName={activeContact.username}
           onClose={() => setShowSafetyNumber(false)}
+        />
+      )}
+
+      {/* Key Restore Modal — shown when logging in from a new device */}
+      {(restoreState === 'needs_password' || restoreState === 'no_backup') && (
+        <KeyRestoreModal
+          onRestore={restoreKeysWithPassword}
+          onSkip={skipRestoreAndGenerateNewKeys}
+          isLoading={false}
+          error={restoreError}
+          noBackup={restoreState === 'no_backup'}
         />
       )}
     </div>

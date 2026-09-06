@@ -154,13 +154,23 @@ class ApiService {
   async uploadKeys(bundle) {
     const res = await this.request('/keys/upload', {
       method: 'POST',
-      body: JSON.stringify(bundle),
+      body: JSON.stringify(bundle), // bundle may include encryptedPrivateKeyBackup
     });
     return res.json();
   }
 
   async fetchKeyBundle(userId) {
     const res = await this.request(`/keys/${userId}`);
+    return res.json();
+  }
+
+  /**
+   * Fetch the current user's encrypted private key backup from the server.
+   * Returns { encryptedPrivateKeyBackup: { ciphertext, iv, salt } } or throws.
+   */
+  async fetchKeyBackup() {
+    const res = await this.request('/keys/backup');
+    if (!res.ok) return null;
     return res.json();
   }
 

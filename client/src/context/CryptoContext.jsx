@@ -9,52 +9,150 @@ import {
   computeFingerprint,
   savePrivateKeys,
   loadPrivateKeys,
+  encryptPrivateKeys,
+  decryptPrivateKeys,
 } from '../services/crypto';
 
 const CryptoContext = createContext(null);
 
+/**
+ * KEY RESTORE STATES
+ *   'idle'        — no action needed (keys loaded from localStorage)
+ *   'checking'    — fetching key backup from server
+ *   'needs_password' — backup found, waiting for user to enter password
+ *   'no_backup'   — no backup on server (old account), must generate fresh keys
+ *   'restoring'   — decryption in progress
+ *   'done'        — keys are ready
+ */
+
 export function CryptoProvider({ children }) {
-  const { user } = useAuth();
+  const { user, setInitializeKeys } = useAuth();
   const [privateKeys, setPrivateKeys] = useState(null);
+
+  // Key restore UI state
+  const [restoreState, setRestoreState] = useState('idle'); // see above
+  const [restoreError, setRestoreError] = useState(null);
 
   // In-memory cache of peer public keys (identity key strings fetched from server)
   // NOT persisted to localStorage — fetched fresh per session to avoid stale-key bugs.
   const peerPublicKeysRef = useRef({});
 
-  // Lock to prevent double key generation from useEffect + initializeKeys racing
+  // Lock to prevent double key generation
   const generatingRef = useRef(false);
 
-  // ── Load private keys when user changes ──
+  // ── Load / restore private keys when user changes ──
   useEffect(() => {
     peerPublicKeysRef.current = {}; // clear peer cache on user change
+    setRestoreError(null);
 
-    if (user) {
-      const keys = loadPrivateKeys(user._id);
-      if (keys) {
-        console.log('[Crypto] Loaded existing keys for', user.username);
-        setPrivateKeys(keys);
-      } else if (!generatingRef.current) {
-        // No keys in localStorage — generate + upload fresh keys.
-        // This happens on first login or after clearing local storage.
-        console.log('[Crypto] No keys found, auto-generating for', user.username);
-        _generateAndUploadKeys(user._id);
-      }
-    } else {
+    if (!user) {
       setPrivateKeys(null);
+      setRestoreState('idle');
+      return;
     }
+
+    // Fast path: keys already in localStorage for this browser
+    const localKeys = loadPrivateKeys(user._id);
+    if (localKeys) {
+      console.log('[Crypto] Loaded existing keys for', user.username);
+      setPrivateKeys(localKeys);
+      setRestoreState('done');
+      return;
+    }
+
+    // No local keys — check if there is a password-encrypted backup on the server.
+    // This is the new-device / new-browser path.
+    console.log('[Crypto] No local keys — checking server for encrypted backup…');
+    setRestoreState('checking');
+
+    api.fetchKeyBackup().then((data) => {
+      if (data && data.encryptedPrivateKeyBackup && data.encryptedPrivateKeyBackup.ciphertext) {
+        // Backup exists — user must enter their password to decrypt
+        setRestoreState('needs_password');
+      } else {
+        // No backup — must generate fresh keys (old account or first device)
+        setRestoreState('no_backup');
+      }
+    }).catch(() => {
+      setRestoreState('no_backup');
+    });
+
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Internal helper — generates key bundle, uploads public part, saves private part.
-   *  Protected by generatingRef to prevent double invocation. */
-  const _generateAndUploadKeys = async (userId) => {
-    if (generatingRef.current) return; // already generating
+  /**
+   * restoreKeysWithPassword — called by KeyRestoreModal when user submits password.
+   * Fetches the backup, decrypts it, saves to localStorage, and marks state done.
+   */
+  const restoreKeysWithPassword = useCallback(async (password) => {
+    if (!user) return;
+    setRestoreState('restoring');
+    setRestoreError(null);
+
+    try {
+      const data = await api.fetchKeyBackup();
+      if (!data || !data.encryptedPrivateKeyBackup) {
+        throw new Error('Could not fetch key backup from server.');
+      }
+
+      // Decrypt entirely client-side — password never leaves the browser
+      const restoredKeys = await decryptPrivateKeys(data.encryptedPrivateKeyBackup, password);
+
+      savePrivateKeys(user._id, restoredKeys);
+      setPrivateKeys(restoredKeys);
+      setRestoreState('done');
+      console.log('[Crypto] Keys restored from encrypted backup for', user.username);
+    } catch (err) {
+      console.error('[Crypto] Key restore failed:', err);
+      // DOMException with name 'OperationError' = wrong password / corrupted ciphertext
+      if (err.name === 'OperationError' || err instanceof DOMException) {
+        setRestoreError('Incorrect password. Please try again.');
+      } else {
+        setRestoreError('Failed to restore keys. Please try again.');
+      }
+      setRestoreState('needs_password');
+    }
+  }, [user]);
+
+  /**
+   * skipRestoreAndGenerateNewKeys — user opts to generate fresh keys,
+   * accepting that old messages will be unreadable.
+   */
+  const skipRestoreAndGenerateNewKeys = useCallback(async () => {
+    if (!user) return;
+    setRestoreState('restoring');
+    await _generateAndUploadKeys(user._id, null); // no password → no backup uploaded
+    setRestoreState('done');
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Internal helper — generates key bundle, uploads public part (+ encrypted backup
+   * if password is provided), saves private part to localStorage.
+   * Protected by generatingRef to prevent double invocation.
+   *
+   * @param {string} userId
+   * @param {string|null} password — if provided, encrypts and uploads private key backup
+   */
+  const _generateAndUploadKeys = async (userId, password) => {
+    if (generatingRef.current) return;
     generatingRef.current = true;
     try {
       const { publicBundle, privateKeys: newKeys } = generateFullKeyBundle();
-      await api.uploadKeys(publicBundle);
+
+      let encryptedPrivateKeyBackup = undefined;
+      if (password) {
+        try {
+          encryptedPrivateKeyBackup = await encryptPrivateKeys(newKeys, password);
+        } catch (encErr) {
+          // Non-fatal: if encryption fails, we still upload the public bundle
+          console.error('[Crypto] Failed to encrypt key backup:', encErr);
+        }
+      }
+
+      await api.uploadKeys({ ...publicBundle, encryptedPrivateKeyBackup });
       savePrivateKeys(userId, newKeys);
       setPrivateKeys(newKeys);
-      console.log('[Crypto] Keys generated and uploaded for userId:', userId);
+      console.log('[Crypto] Keys generated and uploaded for userId:', userId,
+        encryptedPrivateKeyBackup ? '(with encrypted backup)' : '(no backup)');
     } catch (err) {
       console.error('Key generation/upload failed:', err);
     } finally {
@@ -63,23 +161,35 @@ export function CryptoProvider({ children }) {
   };
 
   /**
-   * initializeKeys — called explicitly after registration.
+   * initializeKeys — called explicitly after registration with the user's password
+   * so we can generate the encrypted backup immediately.
    * Generates, uploads and saves a new key bundle only if none exists.
+   *
+   * @param {object} activeUser
+   * @param {string} password — user's registration password, used for backup encryption
    */
   const initializeKeys = useCallback(
-    async (activeUser = user) => {
+    async (activeUser = user, password = null) => {
       if (!activeUser) return;
 
       const existing = loadPrivateKeys(activeUser._id);
       if (existing) {
         setPrivateKeys(existing);
+        setRestoreState('done');
         return existing;
       }
 
-      await _generateAndUploadKeys(activeUser._id);
+      setRestoreState('restoring');
+      await _generateAndUploadKeys(activeUser._id, password);
+      setRestoreState('done');
     },
     [user] // eslint-disable-line react-hooks/exhaustive-deps
   );
+
+  // Wire initializeKeys into AuthContext so register() can call it with the password.
+  useEffect(() => {
+    if (setInitializeKeys) setInitializeKeys(initializeKeys);
+  }, [initializeKeys, setInitializeKeys]);
 
   /**
    * getPeerPublicKey — fetches (and caches in memory) the peer's identity public key.
@@ -208,7 +318,11 @@ export function CryptoProvider({ children }) {
     <CryptoContext.Provider
       value={{
         privateKeys,
+        restoreState,
+        restoreError,
         initializeKeys,
+        restoreKeysWithPassword,
+        skipRestoreAndGenerateNewKeys,
         establishSession,
         encrypt,
         decrypt,
