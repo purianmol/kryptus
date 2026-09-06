@@ -42,7 +42,7 @@ app.use(express.json({ limit: '1mb' }));
 // ── API Routes ──
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', apiLimiter, userRoutes);
-app.use('/api/keys', keyUploadLimiter, keyRoutes);
+app.use('/api/keys', apiLimiter, keyRoutes);
 app.use('/api/messages', apiLimiter, messageRoutes);
 
 // Health check

@@ -2,13 +2,14 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/authenticate');
 const PublicKeyBundle = require('../models/PublicKeyBundle');
+const { keyUploadLimiter } = require('../middleware/rateLimit');
 
 /**
  * POST /api/keys/upload
  * Upload/replace the authenticated user's public key bundle.
  * Client sends: { identityKey, signedPreKey: { keyId, publicKey, signature }, oneTimePreKeys: [{ keyId, publicKey }] }
  */
-router.post('/upload', authenticate, async (req, res) => {
+router.post('/upload', authenticate, keyUploadLimiter, async (req, res) => {
   try {
     const { identityKey, signedPreKey, oneTimePreKeys, encryptedPrivateKeyBackup } = req.body;
 
