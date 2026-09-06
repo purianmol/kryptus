@@ -156,7 +156,9 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify(bundle), // bundle may include encryptedPrivateKeyBackup
     });
-    return res.json();
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to upload keys');
+    return data;
   }
 
   async fetchKeyBundle(userId) {
@@ -193,7 +195,9 @@ class ApiService {
       method: 'PATCH',
       body: JSON.stringify({ encryptedPrivateKeyBackup }),
     });
-    return res.json();
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to upload key backup');
+    return data;
   }
 
   // ── Message endpoints ──

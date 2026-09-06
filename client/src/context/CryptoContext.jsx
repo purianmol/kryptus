@@ -289,8 +289,14 @@ export function CryptoProvider({ children }) {
       }
 
       setRestoreState('restoring');
-      await _generateAndUploadKeys(activeUser._id, password);
-      setRestoreState('done');
+      try {
+        await _generateAndUploadKeys(activeUser._id, password);
+        setRestoreState('done');
+      } catch (err) {
+        console.error('[Crypto] Failed to initialize keys on registration:', err);
+        setRestoreError('Failed to generate keys. Please try again.');
+        setRestoreState('no_backup');
+      }
     },
     [user] // eslint-disable-line react-hooks/exhaustive-deps
   );
