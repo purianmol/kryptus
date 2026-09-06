@@ -10,7 +10,7 @@ const PublicKeyBundle = require('../models/PublicKeyBundle');
  */
 router.post('/upload', authenticate, async (req, res) => {
   try {
-    const { identityKey, signedPreKey, oneTimePreKeys } = req.body;
+    const { identityKey, signedPreKey, oneTimePreKeys, encryptedPrivateKeyBackup } = req.body;
 
     if (!identityKey || !signedPreKey || !oneTimePreKeys) {
       return res.status(400).json({
@@ -30,20 +30,35 @@ router.post('/upload', authenticate, async (req, res) => {
       });
     }
 
+    // Build the update payload
+    const updatePayload = {
+      userId: req.user.userId,
+      identityKey,
+      signedPreKey,
+      oneTimePreKeys: oneTimePreKeys.map((k) => ({
+        keyId: k.keyId,
+        publicKey: k.publicKey,
+        used: false,
+      })),
+      updatedAt: new Date(),
+    };
+
+    // Store the encrypted private key backup if provided.
+    // Validation: all three fields must be present together.
+    if (encryptedPrivateKeyBackup) {
+      const { ciphertext, iv, salt } = encryptedPrivateKeyBackup;
+      if (!ciphertext || !iv || !salt) {
+        return res.status(400).json({
+          error: 'encryptedPrivateKeyBackup must include ciphertext, iv, and salt.',
+        });
+      }
+      updatePayload.encryptedPrivateKeyBackup = { ciphertext, iv, salt };
+    }
+
     // Upsert — create or replace the bundle for this user
     const bundle = await PublicKeyBundle.findOneAndUpdate(
       { userId: req.user.userId },
-      {
-        userId: req.user.userId,
-        identityKey,
-        signedPreKey,
-        oneTimePreKeys: oneTimePreKeys.map((k) => ({
-          keyId: k.keyId,
-          publicKey: k.publicKey,
-          used: false,
-        })),
-        updatedAt: new Date(),
-      },
+      updatePayload,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
@@ -53,6 +68,35 @@ router.post('/upload', authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error('Key upload error:', error);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+/**
+ * GET /api/keys/backup
+ * Returns the encrypted private key backup for the authenticated user.
+ * Used when logging in from a new device — client decrypts locally with password.
+ */
+router.get('/backup', authenticate, async (req, res) => {
+  try {
+    const bundle = await PublicKeyBundle.findOne(
+      { userId: req.user.userId },
+      { encryptedPrivateKeyBackup: 1 } // projection — return only the backup field
+    );
+
+    if (!bundle) {
+      return res.status(404).json({ error: 'No key bundle found for this user.' });
+    }
+
+    const backup = bundle.encryptedPrivateKeyBackup;
+    if (!backup || !backup.ciphertext) {
+      // No backup stored yet (user registered before this feature was added)
+      return res.status(404).json({ error: 'No encrypted key backup found.' });
+    }
+
+    res.json({ encryptedPrivateKeyBackup: backup });
+  } catch (error) {
+    console.error('Key backup fetch error:', error);
     res.status(500).json({ error: 'Internal server error.' });
   }
 });
