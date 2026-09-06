@@ -32,6 +32,7 @@ const io = new Server(server, {
 });
 
 // ── Middleware ──
+app.set('trust proxy', 1); // Trust first proxy for correct IP logging / rate limiting
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true,
