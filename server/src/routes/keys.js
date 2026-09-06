@@ -73,6 +73,66 @@ router.post('/upload', authenticate, async (req, res) => {
 });
 
 /**
+ * GET /api/keys/me
+ * Returns the authenticated user's own identity key and backup status.
+ * Non-destructive — does NOT consume one-time pre-keys.
+ * Used by the client to detect key mismatches and missing backups.
+ */
+router.get('/me', authenticate, async (req, res) => {
+  try {
+    const bundle = await PublicKeyBundle.findOne({ userId: req.user.userId });
+    if (!bundle) {
+      return res.status(404).json({ error: 'No key bundle found.' });
+    }
+
+    res.json({
+      identityKey: bundle.identityKey,
+      hasBackup: !!(bundle.encryptedPrivateKeyBackup && bundle.encryptedPrivateKeyBackup.ciphertext),
+    });
+  } catch (error) {
+    console.error('Key self-check error:', error);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+/**
+ * PATCH /api/keys/backup
+ * Upload ONLY the encrypted private key backup without touching the public key bundle.
+ * Used when an existing browser retroactively creates a backup for cross-device sync.
+ */
+router.patch('/backup', authenticate, async (req, res) => {
+  try {
+    const { encryptedPrivateKeyBackup } = req.body;
+
+    if (!encryptedPrivateKeyBackup) {
+      return res.status(400).json({ error: 'encryptedPrivateKeyBackup is required.' });
+    }
+
+    const { ciphertext, iv, salt } = encryptedPrivateKeyBackup;
+    if (!ciphertext || !iv || !salt) {
+      return res.status(400).json({
+        error: 'encryptedPrivateKeyBackup must include ciphertext, iv, and salt.',
+      });
+    }
+
+    const result = await PublicKeyBundle.findOneAndUpdate(
+      { userId: req.user.userId },
+      { encryptedPrivateKeyBackup: { ciphertext, iv, salt } },
+      { new: true }
+    );
+
+    if (!result) {
+      return res.status(404).json({ error: 'No key bundle found for this user.' });
+    }
+
+    res.json({ message: 'Key backup uploaded successfully.' });
+  } catch (error) {
+    console.error('Key backup upload error:', error);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+/**
  * GET /api/keys/backup
  * Returns the encrypted private key backup for the authenticated user.
  * Used when logging in from a new device — client decrypts locally with password.
