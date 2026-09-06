@@ -69,7 +69,7 @@ export default function MessageList({ messages, currentUserId, isTyping }) {
         return (
           <div
             key={item.id}
-            className={`message-bubble ${isSent ? 'sent' : 'received'}`}
+            className={`message-bubble ${isSent ? 'sent' : 'received'} ${item.decryptionFailed ? 'decryption-failed' : ''}`}
           >
             <div>{item.text}</div>
             <div className="message-meta">

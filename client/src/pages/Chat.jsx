@@ -213,7 +213,7 @@ export default function Chat() {
               text: plaintext || '🔒 Unable to decrypt',
               timestamp: msg.createdAt,
               status: msg.senderId === user._id ? 'delivered' : 'received',
-              failed: !plaintext,
+              decryptionFailed: !plaintext,
             });
           }
 
