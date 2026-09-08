@@ -200,4 +200,39 @@ router.delete('/request/:targetUserId', authenticate, async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/users/friend/:friendId
+ * Remove an accepted friend from both sides (unilateral unfriend).
+ */
+router.delete('/friend/:friendId', authenticate, async (req, res) => {
+  try {
+    const myId = req.user.userId;
+    const { friendId } = req.params;
+
+    if (myId === friendId) {
+      return res.status(400).json({ error: 'Cannot remove yourself.' });
+    }
+
+    const [me, other] = await Promise.all([
+      User.findById(myId),
+      User.findById(friendId),
+    ]);
+
+    if (!me) return res.status(404).json({ error: 'User not found.' });
+
+    me.friends = me.friends.filter((f) => f.userId.toString() !== friendId);
+    await me.save();
+
+    if (other) {
+      other.friends = other.friends.filter((f) => f.userId.toString() !== myId);
+      await other.save();
+    }
+
+    res.json({ message: 'Friend removed.' });
+  } catch (error) {
+    console.error('Remove friend error:', error);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
 module.exports = router;

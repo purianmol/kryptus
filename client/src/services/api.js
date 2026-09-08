@@ -149,6 +149,11 @@ class ApiService {
     return res.json();
   }
 
+  async removeFriend(friendId) {
+    const res = await this.request(`/users/friend/${friendId}`, { method: 'DELETE' });
+    return res.json();
+  }
+
   // ── Key endpoints ──
 
   async uploadKeys(bundle) {
