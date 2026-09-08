@@ -482,6 +482,36 @@ a {
   color: var(--text-primary);
 }
 
+.contact-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.contact-time {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.contact-preview {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-preview.unread {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Legacy alias kept for safety */
 .contact-status-text {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -1046,5 +1076,172 @@ a {
   text-align: center;
   color: var(--text-muted);
   font-size: 0.85rem;
+}
+
+/* ── Clickable links in messages ── */
+.message-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  opacity: 0.9;
+  word-break: break-all;
+}
+
+.message-bubble.sent .message-link {
+  color: rgba(255,255,255,0.92);
+}
+
+.message-link:hover {
+  opacity: 1;
+}
+
+/* ── Contact context dropdown ── */
+.contact-menu-wrapper {
+  position: relative;
+}
+
+.contact-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 200;
+  min-width: 160px;
+  overflow: hidden;
+  animation: fadeIn 0.15s ease;
+}
+
+.contact-dropdown-item {
+  width: 100%;
+  padding: 11px 16px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-family: var(--font-family);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background var(--transition-fast);
+}
+
+.contact-dropdown-item:hover {
+  background: var(--bg-hover);
+}
+
+.contact-dropdown-item.danger {
+  color: var(--accent-red);
+}
+
+.contact-dropdown-item.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.contact-dropdown-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Emoji Picker ── */
+.message-input-container {
+  position: relative;
+}
+
+.emoji-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 24px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 200;
+  width: 300px;
+  overflow: hidden;
+  animation: slideInUp 0.2s ease;
+}
+
+.emoji-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  padding: 4px 8px 0;
+  gap: 2px;
+}
+
+.emoji-tab {
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.emoji-tab.active,
+.emoji-tab:hover {
+  color: var(--accent-blue);
+  border-bottom-color: var(--accent-blue);
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+  padding: 8px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.emoji-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast);
+  line-height: 1;
+}
+
+.emoji-btn:hover {
+  background: var(--bg-hover);
+}
+
+.emoji-toggle-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  font-size: 1.15rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+  color: var(--text-secondary);
+}
+
+.emoji-toggle-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-blue);
+}
+
+.emoji-toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 

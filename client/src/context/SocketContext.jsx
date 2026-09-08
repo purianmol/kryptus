@@ -15,6 +15,7 @@ export function SocketProvider({ children }) {
   const { user } = useAuth();
   const [socket, setSocket] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const messageListenersRef = useRef([]);
   const deliveryListenersRef = useRef([]);
@@ -42,16 +43,36 @@ export function SocketProvider({ children }) {
     newSocket.on('connect', () => {
       console.log('🟢 Socket connected');
       setConnected(true);
+      setReconnecting(false);
     });
 
     newSocket.on('disconnect', (reason) => {
       console.log('🔴 Socket disconnected:', reason);
       setConnected(false);
+      // Only set reconnecting if we intend to reconnect automatically
+      if (reason !== 'io client disconnect') {
+        setReconnecting(true);
+      }
     });
 
     newSocket.on('connect_error', (error) => {
       console.error('Socket connection error:', error.message);
       setConnected(false);
+      setReconnecting(true);
+    });
+
+    newSocket.on('reconnect', () => {
+      console.log('🔄 Socket reconnected');
+      setConnected(true);
+      setReconnecting(false);
+    });
+
+    newSocket.on('reconnect_attempt', () => {
+      setReconnecting(true);
+    });
+
+    newSocket.on('reconnect_failed', () => {
+      setReconnecting(false);
     });
 
     newSocket.on('users_online', (userIds) => {
@@ -94,6 +115,7 @@ export function SocketProvider({ children }) {
       newSocket.disconnect();
       setSocket(null);
       setConnected(false);
+      setReconnecting(false);
     };
   }, [user]);
 
@@ -160,6 +182,7 @@ export function SocketProvider({ children }) {
       value={{
         socket,
         connected,
+        reconnecting,
         onlineUsers,
         sendMessage,
         ackMessage,

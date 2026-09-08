@@ -1,9 +1,49 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
-export default function MessageInput({ onSend, onTyping, disabled }) {
+// Curated emoji set grouped by category
+const EMOJI_GROUPS = [
+  { label: 'Smileys', emojis: ['😀','😂','😍','🥺','😎','🤔','😅','🥹','😭','😤','🤯','😇','🤗','🫡','😴','🤩','😬','🙃','😏','😒'] },
+  { label: 'Gestures', emojis: ['👍','👎','👋','🤝','🙏','👏','🤜','✌️','🤞','💪','🫶','❤️','🔥','⭐','💯','✅','❌','🎉','🎊','💡'] },
+  { label: 'Objects', emojis: ['📱','💻','🔐','🛡️','📨','📦','🗑️','🔑','🔒','💬','📞','🎵','🎮','☕','🍕','🚀','🌍','💰','📊','🧠'] },
+];
+
+export default function MessageInput({ onSend, onTyping, disabled, reconnecting }) {
   const [text, setText] = useState('');
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [emojiTab, setEmojiTab] = useState(0);
   const typingTimeoutRef = useRef(null);
   const textareaRef = useRef(null);
+  const emojiPickerRef = useRef(null);
+
+  // Close emoji picker on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target)) {
+        setShowEmoji(false);
+      }
+    };
+    if (showEmoji) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showEmoji]);
+
+  const insertEmoji = useCallback((emoji) => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      setText((prev) => prev + emoji);
+      return;
+    }
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const newText = text.slice(0, start) + emoji + text.slice(end);
+    setText(newText);
+    // Restore cursor position after emoji
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + emoji.length, start + emoji.length);
+    }, 0);
+  }, [text]);
 
   const handleChange = (e) => {
     setText(e.target.value);
@@ -29,6 +69,7 @@ export default function MessageInput({ onSend, onTyping, disabled }) {
     if (!text.trim() || disabled) return;
     onSend(text);
     setText('');
+    setShowEmoji(false);
 
     // Reset textarea height
     if (textareaRef.current) {
@@ -50,15 +91,59 @@ export default function MessageInput({ onSend, onTyping, disabled }) {
     }
   };
 
+  const placeholderText = reconnecting
+    ? 'Reconnecting…'
+    : disabled
+    ? 'Connecting…'
+    : 'Type an encrypted message…';
+
   return (
     <div className="message-input-container">
+      {/* Emoji Picker */}
+      {showEmoji && (
+        <div className="emoji-picker" ref={emojiPickerRef}>
+          <div className="emoji-tabs">
+            {EMOJI_GROUPS.map((g, i) => (
+              <button
+                key={g.label}
+                className={`emoji-tab ${emojiTab === i ? 'active' : ''}`}
+                onClick={() => setEmojiTab(i)}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+          <div className="emoji-grid">
+            {EMOJI_GROUPS[emojiTab].emojis.map((emoji) => (
+              <button
+                key={emoji}
+                className="emoji-btn"
+                onClick={() => insertEmoji(emoji)}
+                title={emoji}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="message-input-wrapper">
+        <button
+          className="emoji-toggle-btn"
+          onClick={() => setShowEmoji((v) => !v)}
+          title="Pick emoji"
+          type="button"
+          disabled={disabled}
+        >
+          😊
+        </button>
         <textarea
           ref={textareaRef}
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? 'Connecting...' : 'Type an encrypted message...'}
+          placeholder={placeholderText}
           disabled={disabled}
           rows={1}
         />

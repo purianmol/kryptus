@@ -9,9 +9,8 @@ import MessageInput from '../components/MessageInput';
 import SafetyNumber from '../components/SafetyNumber';
 import AddFriendPanel from '../components/AddFriendPanel';
 import KeyRestoreModal from '../components/KeyRestoreModal';
-import { v4 as uuidv4 } from 'uuid';
 
-// Simple UUID generator fallback
+// Simple UUID generator
 function generateId() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
@@ -28,7 +27,7 @@ export default function Chat() {
     restoreKeysWithPassword, generateNewKeysWithPassword,
     uploadBackupWithPassword, reuploadKeysWithPassword,
   } = useCrypto();
-  const { connected, onlineUsers, sendMessage, ackMessage, onMessage, onDelivery, onTyping, emitTyping } = useSocket();
+  const { connected, reconnecting, onlineUsers, sendMessage, ackMessage, onMessage, onDelivery, onTyping, emitTyping } = useSocket();
 
   const [contacts, setContacts] = useState([]);
   const [activeContact, setActiveContact] = useState(null);
@@ -37,7 +36,14 @@ export default function Chat() {
   const [peerTyping, setPeerTyping] = useState({});
   const [showSafetyNumber, setShowSafetyNumber] = useState(false);
   const [showAddFriend, setShowAddFriend] = useState(false);
+  const [showContactMenu, setShowContactMenu] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [removingFriend, setRemovingFriend] = useState(false);
+
+  // Track whether pending messages were already fetched this session
+  const pendingFetchedRef = useRef(false);
+  const contactMenuRef = useRef(null);
 
   // Load friends (contacts)
   const loadContacts = useCallback(async () => {
@@ -73,6 +79,19 @@ export default function Chat() {
       localStorage.setItem(`conversations_${user._id}`, JSON.stringify(conversations));
     }
   }, [conversations, user]);
+
+  // Close contact menu on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (contactMenuRef.current && !contactMenuRef.current.contains(e.target)) {
+        setShowContactMenu(false);
+      }
+    };
+    if (showContactMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showContactMenu]);
 
   // Listen for incoming messages
   useEffect(() => {
@@ -150,8 +169,11 @@ export default function Chat() {
     return unsubscribe;
   }, [onTyping]);
 
-  // Fetch pending messages on mount
+  // Fetch pending messages on first connection (only once per session)
   useEffect(() => {
+    if (!connected || pendingFetchedRef.current) return;
+    pendingFetchedRef.current = true;
+
     const fetchPending = async () => {
       try {
         const data = await api.getPendingMessages();
@@ -183,9 +205,7 @@ export default function Chat() {
       }
     };
 
-    if (connected) {
-      fetchPending();
-    }
+    fetchPending();
   }, [connected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Select contact
@@ -193,6 +213,7 @@ export default function Chat() {
     async (contact) => {
       setActiveContact(contact);
       setChatOpen(true);
+      setShowContactMenu(false);
       setUnreadCounts((prev) => ({ ...prev, [contact._id]: 0 }));
 
       // Pre-establish session
@@ -203,11 +224,10 @@ export default function Chat() {
         const data = await api.getConversationHistory(contact._id);
         if (data.messages && data.messages.length > 0) {
           const decryptedMessages = [];
-          
+
           for (const msg of data.messages) {
-            // Decrypt the ciphertext (works for both sent and received messages because the shared secret is identical)
             const plaintext = await decrypt(contact._id, msg.ciphertext, msg.iv);
-            
+
             decryptedMessages.push({
               id: msg.messageId,
               senderId: msg.senderId,
@@ -222,18 +242,13 @@ export default function Chat() {
             const existing = prev[contact._id] || [];
             // Merge existing and new, deduplicating by id
             const mergedMap = new Map();
-            for (const msg of existing) {
-              mergedMap.set(msg.id, msg);
-            }
-            for (const msg of decryptedMessages) {
-              mergedMap.set(msg.id, msg);
-            }
-            
-            // Sort by timestamp
+            for (const msg of existing) mergedMap.set(msg.id, msg);
+            for (const msg of decryptedMessages) mergedMap.set(msg.id, msg);
+
             const mergedList = Array.from(mergedMap.values()).sort(
               (a, b) => new Date(a.timestamp) - new Date(b.timestamp)
             );
-            
+
             return { ...prev, [contact._id]: mergedList };
           });
         }
@@ -252,13 +267,9 @@ export default function Chat() {
       const messageId = generateId();
 
       try {
-        // Encrypt the message
         const { ciphertext, iv } = await encrypt(activeContact._id, text.trim());
-
-        // Send via Socket.io
         sendMessage(activeContact._id, messageId, ciphertext, iv);
 
-        // Add to local conversation
         const message = {
           id: messageId,
           senderId: user._id,
@@ -273,7 +284,6 @@ export default function Chat() {
         }));
       } catch (err) {
         console.error('Failed to send message:', err);
-        // Add failed message to conversation
         setConversations((prev) => ({
           ...prev,
           [activeContact._id]: [
@@ -303,8 +313,70 @@ export default function Chat() {
     [activeContact, emitTyping]
   );
 
+  // Remove friend
+  const handleRemoveFriend = useCallback(async () => {
+    if (!activeContact) return;
+    const confirmed = window.confirm(
+      `Remove ${activeContact.username} as a friend? This will also clear your local chat history with them.`
+    );
+    if (!confirmed) return;
+
+    setRemovingFriend(true);
+    setShowContactMenu(false);
+    try {
+      await api.removeFriend(activeContact._id);
+
+      // Clear local conversation for this peer
+      setConversations((prev) => {
+        const updated = { ...prev };
+        delete updated[activeContact._id];
+        if (user) {
+          const saved = JSON.parse(localStorage.getItem(`conversations_${user._id}`) || '{}');
+          delete saved[activeContact._id];
+          localStorage.setItem(`conversations_${user._id}`, JSON.stringify(saved));
+        }
+        return updated;
+      });
+
+      setActiveContact(null);
+      setChatOpen(false);
+      await loadContacts();
+    } catch (err) {
+      console.error('Failed to remove friend:', err);
+    } finally {
+      setRemovingFriend(false);
+    }
+  }, [activeContact, loadContacts, user]);
+
+  // Delete chat (local only — clears messages for this peer from state + localStorage)
+  const handleDeleteChat = useCallback(() => {
+    if (!activeContact) return;
+    const confirmed = window.confirm(
+      `Delete your local chat history with ${activeContact.username}? Messages can be restored from server history.`
+    );
+    if (!confirmed) return;
+
+    setShowContactMenu(false);
+    setConversations((prev) => {
+      const updated = { ...prev };
+      delete updated[activeContact._id];
+      if (user) {
+        const saved = JSON.parse(localStorage.getItem(`conversations_${user._id}`) || '{}');
+        delete saved[activeContact._id];
+        localStorage.setItem(`conversations_${user._id}`, JSON.stringify(saved));
+      }
+      return updated;
+    });
+  }, [activeContact, user]);
+
+  // Logout
   const handleLogout = async () => {
-    await logout();
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
 
   const currentMessages = activeContact ? conversations[activeContact._id] || [] : [];
@@ -326,48 +398,65 @@ export default function Chat() {
     );
   }
 
+  if (isLoggingOut) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', flexDirection: 'column', gap: '1rem',
+        color: 'var(--text-secondary)',
+      }}>
+        <div style={{ fontSize: '2rem' }}>🔐</div>
+        <p>Signing out securely…</p>
+      </div>
+    );
+  }
+
   return (
     <div className={`chat-app ${chatOpen ? 'chat-open' : ''}`}>
       {/* Sidebar */}
-        <div className="sidebar">
-          <div className="sidebar-header">
-            <div className="sidebar-header-top">
-              <h2>🔐 Kryptus</h2>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  className="icon-btn"
-                  onClick={() => setShowAddFriend((v) => !v)}
-                  title="Add friend"
-                  style={{ fontSize: '1rem' }}
-                >
-                  {showAddFriend ? '✕' : '➕'}
-                </button>
-                <button className="logout-btn" onClick={handleLogout}>
-                  Logout
-                </button>
-              </div>
-            </div>
-            <div className="sidebar-user-info">
-              <span
-                className={`connection-status ${connected ? 'online' : 'offline'}`}
-              />
-              <span>{user?.username}</span>
-              <span>•</span>
-              <span>{connected ? 'Connected' : 'Connecting...'}</span>
+      <div className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-header-top">
+            <h2>🔐 Kryptus</h2>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                className="icon-btn"
+                onClick={() => setShowAddFriend((v) => !v)}
+                title="Add friend"
+                style={{ fontSize: '1rem' }}
+              >
+                {showAddFriend ? '✕' : '➕'}
+              </button>
+              <button className="logout-btn" onClick={handleLogout}>
+                Logout
+              </button>
             </div>
           </div>
-
-          {showAddFriend ? (
-            <AddFriendPanel onFriendAdded={() => { loadContacts(); setShowAddFriend(false); }} />
-          ) : (
-            <ContactList
-              contacts={contacts}
-              activeContact={activeContact}
-              onlineUsers={onlineUsers}
-              unreadCounts={unreadCounts}
-              onSelect={handleSelectContact}
+          <div className="sidebar-user-info">
+            <span
+              className={`connection-status ${connected ? 'online' : 'offline'}`}
             />
-          )}
+            <span>{user?.username}</span>
+            <span>•</span>
+            <span>
+              {connected ? 'Connected' : reconnecting ? 'Reconnecting…' : 'Connecting…'}
+            </span>
+          </div>
+        </div>
+
+        {showAddFriend ? (
+          <AddFriendPanel onFriendAdded={() => { loadContacts(); setShowAddFriend(false); }} />
+        ) : (
+          <ContactList
+            contacts={contacts}
+            activeContact={activeContact}
+            onlineUsers={onlineUsers}
+            unreadCounts={unreadCounts}
+            onSelect={handleSelectContact}
+            conversations={conversations}
+            currentUserId={user?._id}
+          />
+        )}
       </div>
 
       {/* Chat Area */}
@@ -382,9 +471,7 @@ export default function Chat() {
                 {activeContact.username[0].toUpperCase()}
                 <span
                   className={`status-dot ${
-                    onlineUsers.includes(activeContact._id)
-                      ? 'online'
-                      : 'offline'
+                    onlineUsers.includes(activeContact._id) ? 'online' : 'offline'
                   }`}
                 />
               </div>
@@ -406,6 +493,34 @@ export default function Chat() {
                 >
                   🛡️
                 </button>
+
+                {/* ⋮ Context Menu */}
+                <div className="contact-menu-wrapper" ref={contactMenuRef}>
+                  <button
+                    className="icon-btn"
+                    onClick={() => setShowContactMenu((v) => !v)}
+                    title="More options"
+                  >
+                    ⋮
+                  </button>
+                  {showContactMenu && (
+                    <div className="contact-dropdown">
+                      <button
+                        className="contact-dropdown-item"
+                        onClick={handleDeleteChat}
+                      >
+                        🗑️ Delete Chat
+                      </button>
+                      <button
+                        className="contact-dropdown-item danger"
+                        onClick={handleRemoveFriend}
+                        disabled={removingFriend}
+                      >
+                        {removingFriend ? '…' : '❌ Remove Friend'}
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -424,6 +539,7 @@ export default function Chat() {
               onSend={handleSendMessage}
               onTyping={handleTyping}
               disabled={!connected}
+              reconnecting={reconnecting}
             />
           </>
         ) : (
@@ -447,7 +563,7 @@ export default function Chat() {
         />
       )}
 
-      {/* Key Restore Modal — shown when key sync issues are detected */}
+      {/* Key Restore Modal */}
       {['needs_password', 'no_backup', 'needs_backup_upload', 'needs_reupload', 'keys_mismatch_restore'].includes(restoreState) && (
         <KeyRestoreModal
           mode={restoreState}

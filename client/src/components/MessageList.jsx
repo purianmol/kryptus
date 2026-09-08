@@ -1,5 +1,45 @@
 import { useEffect, useRef } from 'react';
 
+// Regex to detect URLs in message text
+const URL_REGEX = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*)/gi;
+
+/**
+ * Parses a text string and returns an array of React nodes,
+ * where URLs become clickable anchor tags.
+ */
+function parseMessageText(text) {
+  if (!text) return text;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  const regex = new RegExp(URL_REGEX.source, 'gi');
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const url = match[0];
+    parts.push(
+      <a
+        key={match.index}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="message-link"
+      >
+        {url}
+      </a>
+    );
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
 export default function MessageList({ messages, currentUserId, isTyping }) {
   const endRef = useRef(null);
 
@@ -71,7 +111,7 @@ export default function MessageList({ messages, currentUserId, isTyping }) {
             key={item.id}
             className={`message-bubble ${isSent ? 'sent' : 'received'} ${item.decryptionFailed ? 'decryption-failed' : ''}`}
           >
-            <div>{item.text}</div>
+            <div>{parseMessageText(item.text)}</div>
             <div className="message-meta">
               <span>{formatTime(item.timestamp)}</span>
               {isSent && getStatusIcon(item.status)}
